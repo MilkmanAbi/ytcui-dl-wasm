@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ytcui-dl · WebAssembly</title>
+<style>
+  :root {
+    --bg: #0f0f12; --panel: #17171c; --line: #2a2a33; --fg: #e7e7ea;
+    --dim: #9a9aa5; --accent: #ff5277; --accent2: #5bd6c4; --ok: #7ee08a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    padding: 24px; max-width: 920px; margin-inline: auto;
+  }
+  h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: .5px; }
+  h1 .accent { color: var(--accent); }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 18px; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1; min-width: 220px; background: var(--panel); border: 1px solid var(--line);
+    color: var(--fg); padding: 10px 12px; border-radius: 8px; font: inherit;
+  }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  button {
+    background: var(--accent); color: #11111a; border: 0; padding: 10px 16px;
+    border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--dim); border: 1px solid var(--line); }
+  .status { color: var(--dim); font-size: 13px; min-height: 20px; margin: 4px 0 14px; }
+  .status.err { color: var(--accent); }
+  .results { display: flex; flex-direction: column; gap: 8px; }
+  .card {
+    display: flex; gap: 12px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px; align-items: center;
+  }
+  .thumb { width: 120px; height: 67px; border-radius: 6px; object-fit: cover; background: #000; flex: none; }
+  .meta { flex: 1; min-width: 0; }
+  .title { font-weight: 600; margin: 0 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .byline { color: var(--dim); font-size: 13px; }
+  .byline .live { color: var(--accent); font-weight: 700; }
+  .acts { display: flex; gap: 6px; flex: none; }
+  .acts button { padding: 7px 11px; font-size: 13px; }
+  .acts .audio { background: var(--accent2); }
+  details.cfg { margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--panel); }
+  details.cfg summary { cursor: pointer; color: var(--dim); font-size: 13px; }
+  details.cfg input { width: 100%; margin-top: 8px; }
+  .player { position: sticky; bottom: 0; margin-top: 18px; }
+  audio { width: 100%; }
+  code { color: var(--accent2); }
+  a { color: var(--accent2); }
+</style>
+</head>
+<body>
+  <h1>ytcui<span class="accent">-dl</span> · WebAssembly</h1>
+  <div class="sub">The native InnerTube client compiled to WASM. Search and resolve YouTube streams, no yt-dlp.</div>
+
+  <div class="row">
+    <input id="q" type="text" placeholder="Search YouTube…" autocomplete="off" />
+    <button id="go" disabled>Search</button>
+  </div>
+  <div id="status" class="status">Loading WebAssembly…</div>
+
+  <details class="cfg">
+    <summary>Proxy settings (required for CORS)</summary>
+    <p class="sub" style="margin:8px 0 0">
+      YouTube's API sends no CORS headers, so the browser can't call it directly — every request goes through a proxy.
+      On Vercel this is auto-detected as <code>/api/proxy?url=</code>. On GitHub Pages, deploy the included Vercel
+      function (or any CORS proxy) and paste its base here. Use <code>{url}</code> as a placeholder, or end with
+      <code>?url=</code> to have the target appended (URL-encoded).
+    </p>
+    <input id="proxy" type="text" placeholder="https://your-app.vercel.app/api/proxy?url=" />
+  </details>
+
+  <div id="results" class="results"></div>
+
+  <div class="player" id="playerWrap" hidden>
+    <div class="sub" id="nowPlaying"></div>
+    <audio id="player" controls></audio>
+  </div>
+
+<script type="module">
+import createYtFast from './ytfast.js';
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $('status'), resultsEl = $('results'), proxyEl = $('proxy');
+
+const setStatus = (msg, err = false) => { statusEl.textContent = msg; statusEl.classList.toggle('err', err); };
+
+// Decide a sensible default proxy. If /api/proxy exists (Vercel), use it.
+// Otherwise leave blank so the user pastes one (GitHub Pages).
+async function defaultProxy() {
+  const saved = localStorage.getItem('ytfast_proxy');
+  if (saved) return saved;
+  try {
+    const r = await fetch('/api/proxy?url=' + encodeURIComponent('https://www.youtube.com/'),
+                          { method: 'GET' });
+    if (r.ok || r.status === 400 || r.status === 502) return '/api/proxy?url=';
+  } catch {}
+  return '';
+}
+
+let Module = null;
+
+(async () => {
+  try {
+    Module = await createYtFast();
+    Module.YTFAST_PROXY = await defaultProxy();
+    proxyEl.value = Module.YTFAST_PROXY;
+    $('go').disabled = false;
+    setStatus(Module.YTFAST_PROXY
+      ? 'Ready. Proxy: ' + Module.YTFAST_PROXY
+      : 'Ready, but set a proxy below first (GitHub Pages has no server).');
+  } catch (e) {
+    setStatus('Failed to load WASM: ' + e, true);
+  }
+})();
+
+proxyEl.addEventListener('change', () => {
+  Module.YTFAST_PROXY = proxyEl.value.trim();
+  localStorage.setItem('ytfast_proxy', Module.YTFAST_PROXY);
+  setStatus('Proxy set: ' + (Module.YTFAST_PROXY || '(none)'));
+});
+
+async function doSearch() {
+  const q = $('q').value.trim();
+  if (!q) return;
+  if (!Module.YTFAST_PROXY) { setStatus('Set a proxy first (see Proxy settings).', true); return; }
+  $('go').disabled = true; resultsEl.innerHTML = '';
+  setStatus('Searching “' + q + '”…');
+  try {
+    const res = JSON.parse(await Module.search(q, 15));
+    if (!res.ok) { setStatus('Error: ' + res.error, true); return; }
+    setStatus(res.results.length + ' results');
+    for (const v of res.results) resultsEl.appendChild(card(v));
+  } catch (e) {
+    setStatus('Search failed: ' + e, true);
+  } finally {
+    $('go').disabled = false;
+  }
+}
+
+function card(v) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  const thumb = v.thumbnail_url || ('https://i.ytimg.com/vi/' + v.id + '/hqdefault.jpg');
+  el.innerHTML = `
+    <img class="thumb" loading="lazy" src="${thumb}" alt="" />
+    <div class="meta">
+      <p class="title">${escapeHtml(v.title || '(untitled)')}</p>
+      <div class="byline">
+        ${escapeHtml(v.channel || '')}
+        ${v.is_live ? '· <span class="live">LIVE</span>' : (v.duration_str ? '· ' + v.duration_str : '')}
+        ${v.view_count_str ? '· ' + escapeHtml(v.view_count_str) : ''}
+      </div>
+    </div>
+    <div class="acts">
+      <button class="audio">Audio</button>
+    </div>`;
+  el.querySelector('.audio').addEventListener('click', () => playAudio(v));
+  return el;
+}
+
+async function playAudio(v) {
+  setStatus('Resolving audio for “' + (v.title || v.id) + '”…');
+  try {
+    const a = JSON.parse(await Module.getBestAudioUrl(v.id));
+    if (!a.ok || !a.url) { setStatus('Could not resolve audio: ' + (a.error || 'no stream'), true); return; }
+
+    const wrap = $('playerWrap'), player = $('player');
+    wrap.hidden = false;
+    $('nowPlaying').textContent = '♪ ' + (a.title || v.title || '') + ' — ' + (a.channel || v.channel || '');
+
+    // Media playback strategy:
+    //   1. DIRECT — the browser fetches googlevideo on the user's own (usually
+    //      residential) IP. googlevideo returns CORS headers on a successful
+    //      media response, so this plays without a proxy and avoids the
+    //      datacenter-IP 403 a server-side proxy would hit.
+    //   2. PROXY fallback — if the direct URL errors (some networks/region),
+    //      route through the proxy. Works unless the proxy IP is itself blocked.
+    let triedProxy = false;
+    player.onerror = () => {
+      if (triedProxy || !Module.YTFAST_PROXY) {
+        setStatus('Playback blocked by YouTube (often an IP/region restriction). '
+                + 'Resolution worked; the stream URL is valid.', true);
+        return;
+      }
+      triedProxy = true;
+      setStatus('Direct playback failed — retrying through the proxy…');
+      player.src = proxify(a.url);
+      player.play().catch(() => {});
+    };
+    player.src = a.url;            // direct first
+    player.play().catch(() => {}); // autoplay may be blocked; controls still work
+    setStatus('Playing (direct). If it stalls, the proxy fallback kicks in.');
+  } catch (e) {
+    setStatus('Audio failed: ' + e, true);
+  }
+}
+
+function proxify(url) {
+  const p = Module.YTFAST_PROXY;
+  if (!p) return url;
+  return p.indexOf('{url}') >= 0 ? p.replace('{url}', encodeURIComponent(url)) : p + encodeURIComponent(url);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+$('go').addEventListener('click', doSearch);
+$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+</script>
+</body>
+</html>

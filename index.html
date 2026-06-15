@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ytcui-dl WASM — example</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { font-family: monospace; background:#0d0d0d; color:#ccc; padding:1rem; }
+  input { background:#1a1a1a; border:1px solid #333; color:#fff; padding:.4rem .6rem; width:280px; }
+  button { background:#1a1a2a; border:1px solid #4444aa; color:#8888ff; padding:.4rem .8rem; cursor:pointer; }
+  button:hover { background:#222240; }
+  #results { margin-top:1rem; }
+  .card { display:flex; gap:.8rem; padding:.5rem; border-bottom:1px solid #222; cursor:pointer; }
+  .card:hover { background:#111; }
+  .card img { width:80px; height:45px; object-fit:cover; flex-shrink:0; }
+  .card .meta { font-size:.8rem; color:#888; }
+  #player { margin-top:1rem; }
+  audio { width:100%; }
+  #status { color:#888; font-size:.8rem; margin:.3rem 0; }
+</style>
+</head>
+<body>
+<h3>▶ ytcui-dl / WASM</h3>
+
+<input id="q" type="text" placeholder="search YouTube…" value="lofi hip hop">
+<button id="btn">Search</button>
+<div id="status">Loading WASM…</div>
+<div id="results"></div>
+
+<div id="player" hidden>
+  <div id="now-playing"></div>
+  <audio id="audio" controls></audio>
+</div>
+
+<script type="module">
+import { YtFastClient } from './ytfast-client.js';
+
+const yt     = new YtFastClient('./dist/ytfast.js');
+const status = document.getElementById('status');
+const btn    = document.getElementById('btn');
+const qEl    = document.getElementById('q');
+
+await yt.ready;
+status.textContent = 'Ready.';
+
+btn.addEventListener('click', async () => {
+    const q = qEl.value.trim();
+    if (!q) return;
+    status.textContent = 'Searching…';
+    document.getElementById('results').innerHTML = '';
+    try {
+        const videos = await yt.search(q, 15);
+        status.textContent = `${videos.length} results`;
+        const div = document.getElementById('results');
+        for (const v of videos) {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <img src="${v.thumbnail_url}" loading="lazy" alt="">
+                <div>
+                    <div>${v.title}</div>
+                    <div class="meta">${v.channel} · ${v.duration_str}${v.is_live ? ' · 🔴 LIVE' : ''}</div>
+                </div>`;
+            card.addEventListener('click', () => playAudio(v.id, v.title));
+            div.appendChild(card);
+        }
+    } catch(e) {
+        status.textContent = 'Error: ' + e.message;
+    }
+});
+
+async function playAudio(id, title) {
+    status.textContent = `Fetching stream for: ${title}`;
+    try {
+        const url = await yt.getBestAudioUrl(id);
+        const audio = document.getElementById('audio');
+        audio.src = url;
+        audio.play();
+        document.getElementById('now-playing').textContent = '▶ ' + title;
+        document.getElementById('player').hidden = false;
+        status.textContent = 'Playing.';
+    } catch(e) {
+        status.textContent = 'Stream error: ' + e.message;
+    }
+}
+</script>
+</body>
+</html>
